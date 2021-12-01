@@ -10,6 +10,9 @@ module dub.dub;
 import dub.compilers.compiler;
 import dub.dependency;
 import dub.dependencyresolver;
+import dub.exception;
+import dub.generators.generator;
+import dub.init;
 import dub.internal.utils;
 import dub.internal.vibecompat.core.file;
 import dub.internal.vibecompat.core.log;
@@ -19,8 +22,6 @@ import dub.package_;
 import dub.packagemanager;
 import dub.packagesuppliers;
 import dub.project;
-import dub.generators.generator;
-import dub.init;
 
 import std.algorithm;
 import std.array : array, replace;
@@ -484,13 +485,13 @@ class Dub {
 				if (!dep.path.empty) {
 					auto path = dep.path;
 					if (!path.absolute) path = this.rootPath ~ path;
-					try if (m_packageManager.getOrLoadPackage(path)) continue;
+					try if (m_packageManager.getOrLoadPackage(path, LoadInitiator(m_project.rootPackage, dep.parseSource, false))) continue;
 					catch (Exception e) { logDebug("Failed to load path based selection: %s", e.toString().sanitize); }
 				} else if (!dep.repository.empty) {
-					if (m_packageManager.loadSCMPackage(getBasePackageName(p), dep))
+					if (m_packageManager.loadSCMPackage(getBasePackageName(p), dep, LoadInitiator(m_project.rootPackage, dep.parseSource, false)))
 						continue;
 				} else {
-					if (m_packageManager.getPackage(p, dep.version_)) continue;
+					if (m_packageManager.getPackage(p, dep.version_, LoadInitiator(m_project.rootPackage, dep.parseSource, false))) continue;
 					foreach (ps; m_packageSuppliers) {
 						try {
 							auto versions = ps.getVersions(p);
@@ -545,16 +546,17 @@ class Dub {
 			auto ver = versions[p]; // Workaround for DMD 2.070.0 AA issue (crashes in aaApply2 if iterating by key+value)
 			assert(!p.canFind(":"), "Resolved packages contain a sub package!?: "~p);
 			Package pack;
+			scope initiator = LoadInitiator(m_project.rootPackage, ver.parseSource, false);
 			if (!ver.path.empty) {
-				try pack = m_packageManager.getOrLoadPackage(ver.path);
+				try pack = m_packageManager.getOrLoadPackage(ver.path, initiator.trace);
 				catch (Exception e) {
 					logDebug("Failed to load path based selection: %s", e.toString().sanitize);
 					continue;
 				}
 			} else if (!ver.repository.empty) {
-				pack = m_packageManager.loadSCMPackage(p, ver);
+				pack = m_packageManager.loadSCMPackage(p, ver, initiator.trace);
 			} else {
-				pack = m_packageManager.getBestPackage(p, ver);
+				pack = m_packageManager.getBestPackage(p, ver, initiator.trace);
 				if (pack && m_packageManager.isManagedPackage(pack)
 					&& ver.version_.isBranch && (options & UpgradeOptions.upgrade) != 0)
 				{
@@ -567,7 +569,7 @@ class Dub {
 
 			FetchOptions fetchOpts;
 			fetchOpts |= (options & UpgradeOptions.preRelease) != 0 ? FetchOptions.usePrerelease : FetchOptions.none;
-			if (!pack) fetch(p, ver, defaultPlacementLocation, fetchOpts, "getting selected version");
+			if (!pack) fetch(p, ver, defaultPlacementLocation, fetchOpts, initiator.trace, "getting selected version");
 			if ((options & UpgradeOptions.select) && p != m_project.rootPackage.name) {
 				if (!ver.repository.empty) {
 					m_project.selections.selectVersionWithRepository(p, ver.repository, ver.versionSpec);
@@ -752,7 +754,12 @@ class Dub {
 	}
 
 	/** Executes D-Scanner tests on the current project. **/
-	void lintProject(string[] args)
+	deprecated(LoadInitiator.deprecation) void lintProject(string[] args)
+	{
+		lintProject(args, LoadInitiator.init);
+	}
+
+	void lintProject(string[] args, LoadInitiator initiator)
 	{
 		import std.path : buildPath, buildNormalizedPath;
 
@@ -760,11 +767,11 @@ class Dub {
 
 		auto tool = "dscanner";
 
-		auto tool_pack = m_packageManager.getBestPackage(tool, ">=0.0.0");
-		if (!tool_pack) tool_pack = m_packageManager.getBestPackage(tool, "~master");
+		auto tool_pack = m_packageManager.getBestPackage(tool, ">=0.0.0", initiator);
+		if (!tool_pack) tool_pack = m_packageManager.getBestPackage(tool, "~master", initiator);
 		if (!tool_pack) {
 			logInfo("%s is not present, getting and storing it user wide", tool);
-			tool_pack = fetch(tool, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none);
+			tool_pack = fetch(tool, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none, initiator);
 		}
 
 		auto dscanner_dub = new Dub(null, m_packageSuppliers);
@@ -828,7 +835,13 @@ class Dub {
 	}
 
 	/// Cleans intermediate/cache files of the given package
-	void cleanPackage(NativePath path)
+	deprecated(LoadInitiator.deprecation) void cleanPackage(NativePath path)
+	{
+		cleanPackage(path, LoadInitiator.init);
+	}
+
+	/// ditto
+	void cleanPackage(NativePath path, LoadInitiator initiator)
 	{
 		logInfo("Cleaning package at %s...", path.toNativeString());
 		enforce(!Package.findPackageFile(path).empty, "No package found.", path.toNativeString());
@@ -838,16 +851,22 @@ class Dub {
 		if (existsFile(path ~ ".dub/build")) rmdirRecurse((path ~ ".dub/build").toNativeString());
 		if (existsFile(path ~ ".dub/metadata_cache.json")) std.file.remove((path ~ ".dub/metadata_cache.json").toNativeString());
 
-		auto p = Package.load(path);
+		auto p = Package.load(path, initiator);
 		if (p.getBuildSettings().targetType == TargetType.none) {
 			foreach (sp; p.subPackages.filter!(sp => !sp.path.empty)) {
-				cleanPackage(path ~ sp.path);
+				cleanPackage(path ~ sp.path, initiator);
 			}
 		}
 	}
 
 	/// Fetches the package matching the dependency and places it in the specified location.
-	Package fetch(string packageId, const Dependency dep, PlacementLocation location, FetchOptions options, string reason = "")
+	deprecated(LoadInitiator.deprecation) Package fetch(string packageId, const Dependency dep, PlacementLocation location, FetchOptions options, string reason = "")
+	{
+		return fetch(packageId, dep, location, options, LoadInitiator.init, reason);
+	}
+
+	/// ditto
+	Package fetch(string packageId, const Dependency dep, PlacementLocation location, FetchOptions options, LoadInitiator initiator, string reason = "")
 	{
 		auto basePackageName = getBasePackageName(packageId);
 		Json pinfo;
@@ -939,7 +958,7 @@ class Dub {
 			logDiagnostic("Placing to %s...", placement.toNativeString());
 
 			try {
-				m_packageManager.storeFetchedPackage(path, pinfo, dstpath);
+				m_packageManager.storeFetchedPackage(path, pinfo, dstpath, initiator);
 				return m_packageManager.getPackage(packageId, ver, dstpath);
 			} catch (ZipException e) {
 				logInfo("Failed to extract zip archive for %s %s...", packageId, ver);
@@ -1084,10 +1103,16 @@ class Dub {
 
 		See_Also: `removeLocalPackage`
 	*/
-	void addLocalPackage(string path, string ver, bool system)
+	deprecated(LoadInitiator.deprecation) void addLocalPackage(string path, string ver, bool system)
+	{
+		addLocalPackage(path, ver, system, LoadInitiator.init);
+	}
+
+	/// ditto
+	void addLocalPackage(string path, string ver, bool system, LoadInitiator initiator)
 	{
 		if (m_dryRun) return;
-		m_packageManager.addLocalPackage(makeAbsolute(path), ver, system ? LocalPackageType.system : LocalPackageType.user);
+		m_packageManager.addLocalPackage(makeAbsolute(path), ver, system ? LocalPackageType.system : LocalPackageType.user, initiator);
 	}
 
 	/** Removes a directory from the list of locally known packages.
@@ -1246,21 +1271,21 @@ class Dub {
 		initPackage(path, depVers, type, format, recipe_callback);
 
 		if (!["vibe.d", "deimos", "minimal"].canFind(type)) {
-			runCustomInitialization(path, type, app_args);
+			runCustomInitialization(path, type, app_args, LoadInitiator.cli);
 		}
 
 		//Act smug to the user.
 		logInfo("Successfully created an empty project in '%s'.", path.toNativeString());
 	}
 
-	private void runCustomInitialization(NativePath path, string type, string[] runArgs)
+	private void runCustomInitialization(NativePath path, string type, string[] runArgs, LoadInitiator initiator)
 	{
 		string packageName = type;
-		auto template_pack = m_packageManager.getBestPackage(packageName, ">=0.0.0");
-		if (!template_pack) template_pack = m_packageManager.getBestPackage(packageName, "~master");
+		auto template_pack = m_packageManager.getBestPackage(packageName, ">=0.0.0", initiator);
+		if (!template_pack) template_pack = m_packageManager.getBestPackage(packageName, "~master", initiator);
 		if (!template_pack) {
 			logInfo("%s is not present, getting and storing it user wide", packageName);
-			template_pack = fetch(packageName, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none);
+			template_pack = fetch(packageName, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none, initiator);
 		}
 
 		Package initSubPackage = m_packageManager.getSubPackage(template_pack, "init-exec", false);
@@ -1318,7 +1343,12 @@ class Dub {
 			generate_args = Additional command line arguments to pass to
 				"ddox generate-html" or "ddox serve-html".
 	*/
-	void runDdox(bool run, string[] generate_args = null)
+	deprecated(LoadInitiator.deprecation) void runDdox(bool run, string[] generate_args = null)
+	{
+		return runDdox(LoadInitiator.init, run, generate_args);
+	}
+	/// ditto
+	void runDdox(LoadInitiator initiator, bool run, string[] generate_args = null)
 	{
 		import std.process : browse;
 
@@ -1328,11 +1358,11 @@ class Dub {
 		auto tool = m_project.rootPackage.recipe.ddoxTool;
 		if (tool.empty) tool = "ddox";
 
-		auto tool_pack = m_packageManager.getBestPackage(tool, ">=0.0.0");
-		if (!tool_pack) tool_pack = m_packageManager.getBestPackage(tool, "~master");
+		auto tool_pack = m_packageManager.getBestPackage(tool, ">=0.0.0", initiator);
+		if (!tool_pack) tool_pack = m_packageManager.getBestPackage(tool, "~master", initiator);
 		if (!tool_pack) {
 			logInfo("%s is not present, getting and storing it user wide", tool);
-			tool_pack = fetch(tool, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none);
+			tool_pack = fetch(tool, Dependency(">=0.0.0"), defaultPlacementLocation, FetchOptions.none, initiator);
 		}
 
 		auto ddox_dub = new Dub(null, m_packageSuppliers);
@@ -1684,6 +1714,7 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 	private Package getPackageRaw(string name, Dependency dep)
 	{
 		auto basename = getBasePackageName(name);
+		scope initiator = LoadInitiator(m_rootPackage, dep.parseSource, true);
 
 		// for sub packages, first try to get them from the base package
 		if (basename != name) {
@@ -1703,7 +1734,7 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 					logDiagnostic("Sub package %s doesn't exist in %s %s.", name, basename, dep.version_);
 					return null;
 				}
-			} else if (auto ret = m_dub.m_packageManager.getBestPackage(name, dep)) {
+			} else if (auto ret = m_dub.m_packageManager.getBestPackage(name, dep, initiator.trace)) {
 				return ret;
 			} else {
 				logDiagnostic("External sub package %s %s not found.", name, dep.version_);
@@ -1716,11 +1747,11 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 			return m_rootPackage.basePackage;
 
 		if (!dep.repository.empty) {
-			auto ret = m_dub.packageManager.loadSCMPackage(name, dep);
+			auto ret = m_dub.packageManager.loadSCMPackage(name, dep, initiator.trace);
 			return ret !is null && dep.matches(ret.version_) ? ret : null;
 		} else if (!dep.path.empty) {
 			try {
-				auto ret = m_dub.packageManager.getOrLoadPackage(dep.path);
+				auto ret = m_dub.packageManager.getOrLoadPackage(dep.path, initiator.trace);
 				if (dep.matches(ret.version_)) return ret;
 			} catch (Exception e) {
 				logDiagnostic("Failed to load path based dependency %s: %s", name, e.msg);
@@ -1729,7 +1760,7 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 			}
 		}
 
-		if (auto ret = m_dub.m_packageManager.getBestPackage(name, dep))
+		if (auto ret = m_dub.m_packageManager.getBestPackage(name, dep, initiator.trace))
 			return ret;
 
 		auto key = name ~ ":" ~ dep.version_.toString();
@@ -1758,8 +1789,8 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 				try {
 					FetchOptions fetchOpts;
 					fetchOpts |= prerelease ? FetchOptions.usePrerelease : FetchOptions.none;
-					m_dub.fetch(rootpack, dep, m_dub.defaultPlacementLocation, fetchOpts, "need sub package description");
-					auto ret = m_dub.m_packageManager.getBestPackage(name, dep);
+					m_dub.fetch(rootpack, dep, m_dub.defaultPlacementLocation, fetchOpts, initiator.trace, "need sub package description");
+					auto ret = m_dub.m_packageManager.getBestPackage(name, dep, initiator.trace);
 					if (!ret) {
 						logWarn("Package %s %s doesn't have a sub package %s", rootpack, dep.version_, name);
 						return null;

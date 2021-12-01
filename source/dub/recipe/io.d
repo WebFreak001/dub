@@ -49,8 +49,9 @@ PackageRecipe readPackageRecipe(NativePath filename, string parent_name = null)
 
 	Params:
 		contents = The contents of the recipe file
-		filename = Name associated with the package recipe - this is only used
-			to determine the file format from the file extension
+		filename = Name associated with the package recipe - this is used both
+			to determine the file format from the file extension and for
+			diagnostic purposes for the user.
 		parent_name = Optional name of the parent package (if this is a sub
 		package)
 		default_package_name = Optional default package name (if no package name
@@ -64,14 +65,14 @@ PackageRecipe parsePackageRecipe(string contents, string filename, string parent
 {
 	import std.algorithm : endsWith;
 	import dub.internal.vibecompat.data.json;
-	import dub.recipe.json : parseJson;
+	import dub.recipe.json;
 	import dub.recipe.sdl : parseSDL;
 
 	PackageRecipe ret;
 
 	ret.name = default_package_name;
 
-	if (filename.endsWith(".json")) parseJson(ret, parseJsonString(contents, filename), parent_name);
+	if (filename.endsWith(".json")) parseJson(ret, parseJsonString(contents, filename), parent_name, NativePath(filename));
 	else if (filename.endsWith(".sdl")) parseSDL(ret, contents, parent_name, filename);
 	else assert(false, "readPackageRecipe called with filename with unknown extension: "~filename);
 	return ret;

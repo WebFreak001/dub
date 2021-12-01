@@ -10,6 +10,8 @@ module dub.project;
 import dub.compilers.compiler;
 import dub.dependency;
 import dub.description;
+import dub.exception;
+import dub.generators.generator;
 import dub.internal.utils;
 import dub.internal.vibecompat.core.file;
 import dub.internal.vibecompat.core.log;
@@ -17,7 +19,6 @@ import dub.internal.vibecompat.data.json;
 import dub.internal.vibecompat.inet.path;
 import dub.package_;
 import dub.packagemanager;
-import dub.generators.generator;
 
 import std.algorithm;
 import std.array;
@@ -63,7 +64,7 @@ class Project {
 			logWarn("There was no package description found for the application in '%s'.", project_path.toNativeString());
 			pack = new Package(PackageRecipe.init, project_path);
 		} else {
-			pack = package_manager.getOrLoadPackage(project_path, packageFile);
+			pack = package_manager.getOrLoadPackage(project_path, LoadInitiator.init, packageFile);
 		}
 
 		this(package_manager, pack);
@@ -333,88 +334,92 @@ class Project {
 			foreach (dep; pack.getAllDependencies()) {
 				Dependency vspec = dep.spec;
 				Package p;
+				scope initiator = LoadInitiator(pack, vspec.parseSource, true);
+				try {
+					auto basename = getBasePackageName(dep.name);
+					auto subname = getSubPackageName(dep.name);
 
-				auto basename = getBasePackageName(dep.name);
-				auto subname = getSubPackageName(dep.name);
+					// non-optional and optional-default dependencies (if no selections file exists)
+					// need to be satisfied
+					bool is_desired = !vspec.optional || m_selections.hasSelectedVersion(basename) || (vspec.default_ && m_selections.bare);
 
-				// non-optional and optional-default dependencies (if no selections file exists)
-				// need to be satisfied
-				bool is_desired = !vspec.optional || m_selections.hasSelectedVersion(basename) || (vspec.default_ && m_selections.bare);
+					Package resolveSubPackage(Package p, in bool silentFail) {
+						return subname.length ? m_packageManager.getSubPackage(p, subname, silentFail) : p;
+					}
 
-				Package resolveSubPackage(Package p, in bool silentFail) {
-					return subname.length ? m_packageManager.getSubPackage(p, subname, silentFail) : p;
-				}
+					if (dep.name == m_rootPackage.basePackage.name) {
+						vspec = Dependency(m_rootPackage.version_);
+						p = m_rootPackage.basePackage;
+					} else if (basename == m_rootPackage.basePackage.name) {
+						vspec = Dependency(m_rootPackage.version_);
+						try p = m_packageManager.getSubPackage(m_rootPackage.basePackage, subname, false);
+						catch (Exception e) {
+							logDiagnostic("%sError getting sub package %s: %s", indent, dep.name, e.msg);
+							if (is_desired) m_missingDependencies ~= dep.name;
+							continue;
+						}
+					} else if (m_selections.hasSelectedVersion(basename)) {
+						vspec = m_selections.getSelectedVersion(basename);
+						if (!vspec.path.empty) {
+							auto path = vspec.path;
+							if (!path.absolute) path = m_rootPackage.path ~ path;
+							p = m_packageManager.getOrLoadPackage(path, initiator.trace, NativePath.init, true);
+							p = resolveSubPackage(p, true);
+						} else if (!vspec.repository.empty) {
+							p = m_packageManager.loadSCMPackage(basename, vspec, initiator.trace);
+							p = resolveSubPackage(p, true);
+						} else {
+							p = m_packageManager.getBestPackage(dep.name, vspec, initiator.trace);
+						}
+					} else if (m_dependencies.canFind!(d => getBasePackageName(d.name) == basename)) {
+						auto idx = m_dependencies.countUntil!(d => getBasePackageName(d.name) == basename);
+						auto bp = m_dependencies[idx].basePackage;
+						vspec = Dependency(bp.path);
+						p = resolveSubPackage(bp, false);
+					} else {
+						logDiagnostic("%sVersion selection for dependency %s (%s) of %s is missing.",
+							indent, basename, dep.name, pack.name);
+					}
 
-				if (dep.name == m_rootPackage.basePackage.name) {
-					vspec = Dependency(m_rootPackage.version_);
-					p = m_rootPackage.basePackage;
-				} else if (basename == m_rootPackage.basePackage.name) {
-					vspec = Dependency(m_rootPackage.version_);
-					try p = m_packageManager.getSubPackage(m_rootPackage.basePackage, subname, false);
-					catch (Exception e) {
-						logDiagnostic("%sError getting sub package %s: %s", indent, dep.name, e.msg);
+					if (!p && !vspec.repository.empty) {
+						p = m_packageManager.loadSCMPackage(basename, vspec, initiator.trace);
+						resolveSubPackage(p, false);
+					}
+
+					if (!p && !vspec.path.empty && is_desired) {
+						NativePath path = vspec.path;
+						if (!path.absolute) path = pack.path ~ path;
+						logDiagnostic("%sAdding local %s in %s", indent, dep.name, path);
+						p = m_packageManager.getOrLoadPackage(path, initiator.trace, NativePath.init, true);
+						if (p.parentPackage !is null) {
+							logWarn("%sSub package %s must be referenced using the path to it's parent package.", indent, dep.name);
+							p = p.parentPackage;
+						}
+						p = resolveSubPackage(p, false);
+						enforce(p.name == dep.name, new DependencySpellingException(path, dep.name, p.name, initiator.trace));
+					}
+
+					if (!p) {
+						logDiagnostic("%sMissing dependency %s %s of %s", indent, dep.name, vspec, pack.name);
 						if (is_desired) m_missingDependencies ~= dep.name;
 						continue;
 					}
-				} else if (m_selections.hasSelectedVersion(basename)) {
-					vspec = m_selections.getSelectedVersion(basename);
-					if (!vspec.path.empty) {
-						auto path = vspec.path;
-						if (!path.absolute) path = m_rootPackage.path ~ path;
-						p = m_packageManager.getOrLoadPackage(path, NativePath.init, true);
-						p = resolveSubPackage(p, true);
-					} else if (!vspec.repository.empty) {
-						p = m_packageManager.loadSCMPackage(basename, vspec);
-						p = resolveSubPackage(p, true);
-					} else {
-						p = m_packageManager.getBestPackage(dep.name, vspec);
+
+					if (!m_dependencies.canFind(p)) {
+						logDiagnostic("%sFound dependency %s %s", indent, dep.name, vspec.toString());
+						m_dependencies ~= p;
+						if (basename == m_rootPackage.basePackage.name)
+							p.warnOnSpecialCompilerFlags();
+						collectDependenciesRec(p, depth+1);
 					}
-				} else if (m_dependencies.canFind!(d => getBasePackageName(d.name) == basename)) {
-					auto idx = m_dependencies.countUntil!(d => getBasePackageName(d.name) == basename);
-					auto bp = m_dependencies[idx].basePackage;
-					vspec = Dependency(bp.path);
-					p = resolveSubPackage(bp, false);
-				} else {
-					logDiagnostic("%sVersion selection for dependency %s (%s) of %s is missing.",
-						indent, basename, dep.name, pack.name);
-				}
 
-				if (!p && !vspec.repository.empty) {
-					p = m_packageManager.loadSCMPackage(basename, vspec);
-					resolveSubPackage(p, false);
+					m_dependees[p] ~= pack;
+					//enforce(p !is null, "Failed to resolve dependency "~dep.name~" "~vspec.toString());
+				} catch (PackageLoadException e) {
+					if (!e.initiators.length || initiator != e.initiators[$ - 1])
+						e.initiators ~= initiator;
+					throw e;
 				}
-
-				if (!p && !vspec.path.empty && is_desired) {
-					NativePath path = vspec.path;
-					if (!path.absolute) path = pack.path ~ path;
-					logDiagnostic("%sAdding local %s in %s", indent, dep.name, path);
-					p = m_packageManager.getOrLoadPackage(path, NativePath.init, true);
-					if (p.parentPackage !is null) {
-						logWarn("%sSub package %s must be referenced using the path to it's parent package.", indent, dep.name);
-						p = p.parentPackage;
-					}
-					p = resolveSubPackage(p, false);
-					enforce(p.name == dep.name,
-						format("Path based dependency %s is referenced with a wrong name: %s vs. %s",
-							path.toNativeString(), dep.name, p.name));
-				}
-
-				if (!p) {
-					logDiagnostic("%sMissing dependency %s %s of %s", indent, dep.name, vspec, pack.name);
-					if (is_desired) m_missingDependencies ~= dep.name;
-					continue;
-				}
-
-				if (!m_dependencies.canFind(p)) {
-					logDiagnostic("%sFound dependency %s %s", indent, dep.name, vspec.toString());
-					m_dependencies ~= p;
-					if (basename == m_rootPackage.basePackage.name)
-						p.warnOnSpecialCompilerFlags();
-					collectDependenciesRec(p, depth+1);
-				}
-
-				m_dependees[p] ~= pack;
-				//enforce(p !is null, "Failed to resolve dependency "~dep.name~" "~vspec.toString());
 			}
 		}
 		collectDependenciesRec(m_rootPackage);
@@ -1508,7 +1513,7 @@ final class SelectedVersions {
 	*/
 	this(Json data)
 	{
-		deserialize(data);
+		deserialize(data, NativePath(defaultFile));
 		m_dirty = false;
 	}
 
@@ -1517,7 +1522,7 @@ final class SelectedVersions {
 	this(NativePath path)
 	{
 		auto json = jsonFromFile(path);
-		deserialize(json);
+		deserialize(json, path);
 		m_dirty = false;
 		m_bare = false;
 	}
@@ -1650,16 +1655,27 @@ final class SelectedVersions {
 		else return serializeToJson(["path": d.path.toString()]);
 	}
 
-	static Dependency dependencyFromJson(Json j)
+	static Dependency dependencyFromJson(Json j, NativePath sourceFile = NativePath.init)
 	{
+		Dependency ret;
 		if (j.type == Json.Type.string)
-			return Dependency(Version(j.get!string));
+			ret = Dependency(Version(j.get!string));
 		else if (j.type == Json.Type.object && "path" in j)
-			return Dependency(NativePath(j["path"].get!string));
+			ret = Dependency(NativePath(j["path"].get!string));
 		else if (j.type == Json.Type.object && "repository" in j)
-			return Dependency(Repository(j["repository"].get!string),
+			ret = Dependency(Repository(j["repository"].get!string),
 				enforce("version" in j, "Expected \"version\" field in repository version object").get!string);
 		else throw new Exception(format("Unexpected type for dependency: %s", j));
+
+		static if (is(typeof(j.line)))
+		{
+			FileLocation src;
+			src.filePath = sourceFile;
+			src.line = cast(typeof(src.line))j.line;
+			ret.parseSource = src;
+		}
+
+		return ret;
 	}
 
 	Json serialize()
@@ -1673,12 +1689,15 @@ final class SelectedVersions {
 		return serialized;
 	}
 
-	private void deserialize(Json json)
+	private void deserialize(Json json, NativePath parseSource = NativePath.init)
 	{
-		enforce(cast(int)json["fileVersion"] == FileVersion, "Mismatched dub.select.json version: " ~ to!string(cast(int)json["fileVersion"]) ~ "vs. " ~to!string(FileVersion));
+		enforce(cast(int)json["fileVersion"] == FileVersion, parseSource.empty
+			? format("Mismatched dub.selections.json version: %s vs %s", cast(int)json["fileVersion"], FileVersion)
+			: format("Mismatched dub.selections.json version: %s vs %s in file '%s'",
+				cast(int)json["fileVersion"], FileVersion, parseSource.toNativeString));
 		clear();
 		scope(failure) clear();
 		foreach (string p, v; json["versions"])
-			m_selections[p] = Selected(dependencyFromJson(v));
+			m_selections[p] = Selected(dependencyFromJson(v, parseSource));
 	}
 }

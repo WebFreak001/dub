@@ -10,6 +10,7 @@ module dub.recipe.packagerecipe;
 import dub.compilers.compiler;
 import dub.compilers.utils : warnOnSpecialCompilerFlags;
 import dub.dependency;
+import dub.exception : FileLocation;
 
 import dub.internal.vibecompat.core.file;
 import dub.internal.vibecompat.core.log;
@@ -107,6 +108,7 @@ struct SubPackage
 {
 	string path;
 	PackageRecipe recipe;
+	FileLocation parseSource;
 }
 
 /// Describes minimal toolchain requirements
@@ -405,38 +407,44 @@ package(dub) void checkPlatform(const scope ref ToolchainRequirements tr, BuildP
 	);
 }
 
-package bool addRequirement(ref ToolchainRequirements req, string name, string value)
+package bool addRequirement(ref ToolchainRequirements req, string name, string value, FileLocation parseSource = FileLocation.init)
 {
 	switch (name) {
 		default: return false;
-		case "dub": req.dub = parseDependency(value); break;
-		case "frontend": req.frontend = parseDMDDependency(value); break;
-		case "ldc": req.ldc = parseDependency(value); break;
-		case "gdc": req.gdc = parseDependency(value); break;
-		case "dmd": req.dmd = parseDMDDependency(value); break;
+		case "dub": req.dub = parseDependency(value, parseSource); break;
+		case "frontend": req.frontend = parseDMDDependency(value, parseSource); break;
+		case "ldc": req.ldc = parseDependency(value, parseSource); break;
+		case "gdc": req.gdc = parseDependency(value, parseSource); break;
+		case "dmd": req.dmd = parseDMDDependency(value, parseSource); break;
 	}
 	return true;
 }
 
-private static Dependency parseDependency(string dep)
+private static Dependency parseDependency(string dep, FileLocation parseSource = FileLocation.init)
 {
-	if (dep == "no") return Dependency.invalid;
-	return Dependency(dep);
+	Dependency ret;
+	if (dep == "no") ret = Dependency.invalid;
+	else ret = Dependency(dep);
+	ret.parseSource = parseSource;
+	return ret;
 }
 
-private static Dependency parseDMDDependency(string dep)
+private static Dependency parseDMDDependency(string dep, FileLocation parseSource = FileLocation.init)
 {
 	import dub.compilers.utils : dmdLikeVersionToSemverLike;
 	import dub.dependency : Dependency;
 	import std.algorithm : map, splitter;
 	import std.array : join;
 
-	if (dep == "no") return Dependency.invalid;
-	return dep
-		.splitter(' ')
-		.map!(r => dmdLikeVersionToSemverLike(r))
-		.join(' ')
-		.Dependency;
+	Dependency ret;
+	if (dep == "no") ret = Dependency.invalid;
+	else ret = dep
+			.splitter(' ')
+			.map!(r => dmdLikeVersionToSemverLike(r))
+			.join(' ')
+			.Dependency;
+	ret.parseSource = parseSource;
+	return ret;
 }
 
 private T clone(T)(ref const(T) val)

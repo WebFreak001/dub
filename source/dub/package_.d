@@ -12,6 +12,7 @@ public import dub.recipe.packagerecipe;
 import dub.compilers.compiler;
 import dub.dependency;
 import dub.description;
+import dub.exception;
 import dub.recipe.json;
 import dub.recipe.sdl;
 
@@ -84,7 +85,10 @@ class Package {
 		import dub.recipe.json;
 
 		PackageRecipe recipe;
-		parseJson(recipe, json_recipe, parent ? parent.name : null);
+		NativePath src = NativePath("(in-memory)");
+		if (!root.empty)
+			src = root ~ NativePath("dub.json");
+		parseJson(recipe, json_recipe, parent ? parent.name : null, src);
 		this(recipe, root, parent, version_override);
 	}
 	/// ditto
@@ -151,16 +155,19 @@ class Package {
 				instead of the one declared in the package recipe, or the one
 				determined by invoking the VCS (GIT currently).
 	*/
-	static Package load(NativePath root, NativePath recipe_file = NativePath.init, Package parent = null, string version_override = "")
+	deprecated(LoadInitiator.deprecation) static Package load(NativePath root, NativePath recipe_file = NativePath.init, Package parent = null, string version_override = "")
+	{
+		return load(root, LoadInitiator.init, recipe_file, parent, version_override);
+	}
+
+	/// ditto
+	static Package load(NativePath root, LoadInitiator initiator, NativePath recipe_file = NativePath.init, Package parent = null, string version_override = "")
 	{
 		import dub.recipe.io;
 
 		if (recipe_file.empty) recipe_file = findPackageFile(root);
 
-		enforce(!recipe_file.empty,
-			"No package file found in %s, expected one of %s"
-				.format(root.toNativeString(),
-					packageInfoFiles.map!(f => cast(string)f.filename).join("/")));
+		enforce(!recipe_file.empty, new MissingPackageFileException(root, initiator, version_override));
 
 		auto recipe = readPackageRecipe(recipe_file, parent ? parent.name : null);
 
@@ -654,9 +661,7 @@ class Package {
 		static assert(isValidVersion(dv));
 
 		enforce(dep.matches(dv),
-			"dub-" ~ dv ~ " does not comply with toolchainRequirements.dub "
-			~ "specification: " ~ m_info.toolchainRequirements.dub.toString()
-			~ "\nPlease consider upgrading your DUB installation");
+			new ToolchainMismatchException(m_path, dep, dv, LoadInitiator(m_parentPackage, dep.parseSource, true), recipe.version_));
 	}
 
 	private void fillWithDefaults()

@@ -7,9 +7,10 @@
 */
 module dub.dependency;
 
+import dub.exception;
 import dub.internal.utils;
-import dub.internal.vibecompat.core.log;
 import dub.internal.vibecompat.core.file;
+import dub.internal.vibecompat.core.log;
 import dub.internal.vibecompat.data.json;
 import dub.internal.vibecompat.inet.path;
 import dub.package_;
@@ -53,6 +54,7 @@ struct Dependency {
 		bool m_optional = false;
 		bool m_default = false;
 		Repository m_repository;
+		FileLocation m_parseSource;
 	}
 
 	/// A Dependency, which matches every valid version.
@@ -114,6 +116,11 @@ struct Dependency {
 	{
 		return m_repository;
 	}
+
+	/// Associates a file location source where this dependency came from, for exception trace purposes.
+	@property FileLocation parseSource() const { return m_parseSource; }
+	/// ditto
+	@property void parseSource(FileLocation parseSource) { m_parseSource = parseSource; }
 
 	/// Determines if the dependency is required or optional.
 	@property bool optional() const { return m_optional; }
@@ -354,7 +361,7 @@ struct Dependency {
 
 		See `toJson` for a description of the JSON format.
 	*/
-	static Dependency fromJson(Json verspec)
+	static Dependency fromJson(Json verspec, NativePath file_path = NativePath.init)
 	@trusted { // NOTE Path and Json is @system in vibe.d 0.7.x and in the compatibility layer
 		Dependency dep;
 		if( verspec.type == Json.Type.object ){
@@ -383,6 +390,15 @@ struct Dependency {
 			// canonical "package-id": "version"
 			dep = Dependency(verspec.get!string);
 		}
+
+		static if (is(typeof(verspec.line)))
+		{
+			FileLocation src;
+			src.filePath = file_path;
+			src.line = cast(typeof(src.line))(verspec.line + 1);
+			dep.parseSource = src;
+		}
+
 		return dep;
 	}
 

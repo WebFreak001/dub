@@ -9,6 +9,7 @@ module dub.recipe.sdl;
 
 import dub.compilers.compiler;
 import dub.dependency;
+import dub.exception : FileLocation;
 import dub.internal.sdlang;
 import dub.internal.vibecompat.core.log;
 import dub.internal.vibecompat.inet.path;
@@ -79,6 +80,7 @@ void parseSDL(ref PackageRecipe recipe, Tag sdl, string parent_name)
 	// finally parse all sub packages
 	recipe.subPackages.length = subpacks.length;
 	foreach (i, n; subpacks) {
+		recipe.subPackages[i].parseSource = FileLocation(n.location);
 		if (n.values.length) {
 			recipe.subPackages[i].path = n.stringTagValue;
 		} else {
@@ -180,6 +182,7 @@ private void parseDependency(Tag t, ref BuildSettingsTemplate bs, string package
 	enforceSDL(pkg !in bs.dependencies, "The dependency '"~pkg~"' is specified more than once.", t);
 
 	Dependency dep = Dependency.any;
+	dep.parseSource = FileLocation(t.location);
 	auto attrs = t.attributes;
 
 	if ("path" in attrs) {

@@ -8,6 +8,7 @@
 module dub.packagemanager;
 
 import dub.dependency;
+import dub.exception;
 import dub.internal.utils;
 import dub.internal.vibecompat.core.file;
 import dub.internal.vibecompat.core.log;
@@ -152,19 +153,27 @@ class PackageManager {
 				the package must still be registered in the package manager.
 			enable_overrides = Apply the local package override list before
 				returning a package (enabled by default)
+			initiator = The package that has requested the load, for tracing
+				purposes through PackageLoadException.
 
 		Returns:
 			The matching package or null if no match was found.
 	*/
-	Package getPackage(string name, Version ver, bool enable_overrides = true)
+	deprecated(LoadInitiator.deprecation) Package getPackage(string name, Version ver, bool enable_overrides = true)
+	{
+		return getPackage(name, ver, LoadInitiator.init, enable_overrides);
+	}
+
+	/// ditto
+	Package getPackage(string name, Version ver, LoadInitiator initiator, bool enable_overrides = true)
 	{
 		if (enable_overrides) {
 			foreach (ref repo; m_repositories)
 				foreach (ovr; repo.overrides)
 					if (ovr.package_ == name && ovr.version_.matches(ver)) {
 						Package pack;
-						if (!ovr.targetPath.empty) pack = getOrLoadPackage(ovr.targetPath);
-						else pack = getPackage(name, ovr.targetVersion, false);
+						if (!ovr.targetPath.empty) pack = getOrLoadPackage(ovr.targetPath, initiator);
+						else pack = getPackage(name, ovr.targetVersion, initiator, false);
 						if (pack) return pack;
 
 						logWarn("Package override %s %s -> %s %s doesn't reference an existing package.",
@@ -180,9 +189,21 @@ class PackageManager {
 	}
 
 	/// ditto
-	Package getPackage(string name, string ver, bool enable_overrides = true)
+	Package getPackage(string name, Version ver, LoadInitiator initiator)
 	{
-		return getPackage(name, Version(ver), enable_overrides);
+		return getPackage(name, ver, initiator, true);
+	}
+
+	/// ditto
+	deprecated(LoadInitiator.deprecation) Package getPackage(string name, string ver, bool enable_overrides = true)
+	{
+		return getPackage(name, Version(ver), LoadInitiator.init, enable_overrides);
+	}
+
+	/// ditto
+	Package getPackage(string name, string ver, LoadInitiator initiator, bool enable_overrides = true)
+	{
+		return getPackage(name, Version(ver), initiator, enable_overrides);
 	}
 
 	/// ditto
@@ -239,19 +260,34 @@ class PackageManager {
 			path = NativePath to the root directory of the package
 			recipe_path = Optional path to the recipe file of the package
 			allow_sub_packages = Also return a sub package if it resides in the given folder
+			initiator = The package that started this load, for filling into package load exceptions.
 
 		Returns: The packages loaded from the given path
 		Throws: Throws an exception if no package can be loaded
 	*/
-	Package getOrLoadPackage(NativePath path, NativePath recipe_path = NativePath.init, bool allow_sub_packages = false)
+	deprecated(LoadInitiator.deprecation) Package getOrLoadPackage(NativePath path, NativePath recipe_path = NativePath.init, bool allow_sub_packages = false)
+	{
+		return getOrLoadPackage(path, LoadInitiator.init, recipe_path, allow_sub_packages);
+	}
+
+	/// ditto
+	Package getOrLoadPackage(NativePath path, LoadInitiator initiator, NativePath recipe_path = NativePath.init, bool allow_sub_packages = false)
 	{
 		path.endsWithSlash = true;
 		foreach (p; getPackageIterator())
 			if (p.path == path && (!p.parentPackage || (allow_sub_packages && p.parentPackage.path != p.path)))
 				return p;
-		auto pack = Package.load(path, recipe_path);
-		addPackages(m_temporaryPackages, pack);
-		return pack;
+		try {
+			auto pack = Package.load(path, initiator, recipe_path);
+			addPackages(m_temporaryPackages, pack);
+			return pack;
+		} catch (PackageLoadException e) {
+			if (initiator != LoadInitiator.init) {
+				if (!e.initiators.length || initiator != e.initiators[$ - 1])
+					e.initiators ~= initiator;
+			}
+			throw e;
+		}
 	}
 
 	/** For a given SCM repository, returns the corresponding package.
@@ -270,7 +306,13 @@ class PackageManager {
 			The package loaded from the given SCM repository or null if the
 			package couldn't be loaded.
 	*/
-	Package loadSCMPackage(string name, Dependency dependency)
+	deprecated(LoadInitiator.deprecation) Package loadSCMPackage(string name, Dependency dependency)
+	{
+		return loadSCMPackage(name, dependency, LoadInitiator.init);
+	}
+
+	/// ditto
+	Package loadSCMPackage(string name, Dependency dependency, LoadInitiator initiator)
 	in { assert(!dependency.repository.empty); }
 	body {
         Package pack;
@@ -278,7 +320,7 @@ class PackageManager {
         with (dependency.repository) final switch (kind)
         {
             case Kind.git:
-                pack = loadGitPackage(name, dependency.versionSpec, dependency.repository.remote);
+                pack = loadGitPackage(name, dependency.versionSpec, dependency.repository.remote, initiator);
         }
         if (pack !is null) {
             addPackages(m_temporaryPackages, pack);
@@ -286,7 +328,7 @@ class PackageManager {
         return pack;
 	}
 
-    private Package loadGitPackage(string name, string versionSpec, string remote)
+    private Package loadGitPackage(string name, string versionSpec, string remote, LoadInitiator initiator)
     {
 		import dub.internal.git : cloneRepository;
 
@@ -308,12 +350,18 @@ class PackageManager {
 			return null;
 		}
 
-		return Package.load(destination);
+		return Package.load(destination, initiator);
     }
 
 	/** Searches for the latest version of a package matching the given dependency.
 	*/
-	Package getBestPackage(string name, Dependency version_spec, bool enable_overrides = true)
+	deprecated(LoadInitiator.deprecation) Package getBestPackage(string name, Dependency version_spec, bool enable_overrides = true)
+	{
+		return getBestPackage(name, version_spec, LoadInitiator.init, enable_overrides);
+	}
+
+	/// ditto
+	Package getBestPackage(string name, Dependency version_spec, LoadInitiator initiator, bool enable_overrides = true)
 	{
 		Package ret;
 		foreach (p; getPackageIterator(name))
@@ -321,16 +369,22 @@ class PackageManager {
 				ret = p;
 
 		if (enable_overrides && ret) {
-			if (auto ovr = getPackage(name, ret.version_))
+			if (auto ovr = getPackage(name, ret.version_, initiator))
 				return ovr;
 		}
 		return ret;
 	}
 
 	/// ditto
-	Package getBestPackage(string name, string version_spec)
+	deprecated(LoadInitiator.deprecation) Package getBestPackage(string name, string version_spec)
 	{
-		return getBestPackage(name, Dependency(version_spec));
+		return getBestPackage(name, version_spec, LoadInitiator.init);
+	}
+
+	/// ditto
+	Package getBestPackage(string name, string version_spec, LoadInitiator initiator)
+	{
+		return getBestPackage(name, Dependency(version_spec), initiator);
 	}
 
 	/** Gets the a specific sub package.
@@ -463,7 +517,12 @@ class PackageManager {
 
 	/// Extracts the package supplied as a path to it's zip file to the
 	/// destination and sets a version field in the package description.
-	Package storeFetchedPackage(NativePath zip_file_path, Json package_info, NativePath destination)
+	deprecated(LoadInitiator.deprecation) Package storeFetchedPackage(NativePath zip_file_path, Json package_info, NativePath destination)
+	{
+		return storeFetchedPackage(zip_file_path, package_info, destination, LoadInitiator.init);
+	}
+	/// ditto
+	Package storeFetchedPackage(NativePath zip_file_path, Json package_info, NativePath destination, LoadInitiator initiator)
 	{
 		import std.range : walkLength;
 
@@ -547,7 +606,7 @@ class PackageManager {
 		logDebug("%s file(s) copied.", to!string(countFiles));
 
 		// overwrite dub.json (this one includes a version field)
-		auto pack = Package.load(destination, NativePath.init, null, package_info["version"].get!string);
+		auto pack = Package.load(destination, initiator, NativePath.init, null, package_info["version"].get!string);
 
 		if (pack.recipePath.head != defaultPackageFilename)
 			// Storeinfo saved a default file, this could be different to the file from the zip.
@@ -595,10 +654,15 @@ class PackageManager {
 		remove(pack);
 	}
 
-	Package addLocalPackage(NativePath path, string verName, LocalPackageType type)
+	deprecated(LoadInitiator.deprecation) Package addLocalPackage(NativePath path, string verName, LocalPackageType type)
+	{
+		return addLocalPackage(path, verName, type, LoadInitiator.init);
+	}
+
+	Package addLocalPackage(NativePath path, string verName, LocalPackageType type, LoadInitiator initiator)
 	{
 		path.endsWithSlash = true;
-		auto pack = Package.load(path);
+		auto pack = Package.load(path, initiator);
 		enforce(pack.name.length, "The package has no name, defined in: " ~ path.toString());
 		if (verName.length)
 			pack.version_ = Version(verName);
@@ -892,7 +956,7 @@ class PackageManager {
 					logError("Package %s declared a sub-package, definition file is missing: %s", pack.name, path.toNativeString());
 					continue;
 				}
-				sp = Package.load(path, NativePath.init, pack);
+				sp = Package.load(path, LoadInitiator(pack), NativePath.init, pack);
 			} else sp = new Package(spr.recipe, pack.path, pack);
 
 			// Add the subpackage.

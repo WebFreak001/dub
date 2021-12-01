@@ -9,9 +9,11 @@ module dub.recipe.json;
 
 import dub.compilers.compiler;
 import dub.dependency;
+import dub.exception : FileLocation;
 import dub.recipe.packagerecipe;
 
 import dub.internal.vibecompat.data.json;
+import dub.internal.vibecompat.inet.path;
 
 import std.algorithm : canFind, startsWith;
 import std.conv : to;
@@ -21,7 +23,12 @@ import std.string : format, indexOf;
 import std.traits : EnumMembers;
 
 
-void parseJson(ref PackageRecipe recipe, Json json, string parent_name)
+deprecated("Provide a file path where this JSON came from") void parseJson(ref PackageRecipe recipe, Json json, string parent_name)
+{
+	parseJson(recipe, json, parent_name, NativePath("(in-memory)"));
+}
+
+void parseJson(ref PackageRecipe recipe, Json json, string parent_name, NativePath file_path)
 {
 	foreach (string field, value; json) {
 		switch (field) {
@@ -37,7 +44,7 @@ void parseJson(ref PackageRecipe recipe, Json json, string parent_name)
 			case "buildTypes":
 				foreach (string name, settings; value) {
 					BuildSettingsTemplate bs;
-					bs.parseJson(settings, null);
+					bs.parseJson(settings, null, file_path);
 					recipe.buildTypes[name] = bs;
 				}
 				break;
@@ -54,7 +61,7 @@ void parseJson(ref PackageRecipe recipe, Json json, string parent_name)
 	auto fullname = parent_name.length ? parent_name ~ ":" ~ recipe.name : recipe.name;
 
 	// parse build settings
-	recipe.buildSettings.parseJson(json, fullname);
+	recipe.buildSettings.parseJson(json, fullname, file_path);
 
 	if (auto pv = "configurations" in json) {
 		TargetType deftargettp = TargetType.library;
@@ -63,14 +70,14 @@ void parseJson(ref PackageRecipe recipe, Json json, string parent_name)
 
 		foreach (settings; *pv) {
 			ConfigurationInfo ci;
-			ci.parseJson(settings, recipe.name, deftargettp);
+			ci.parseJson(settings, recipe.name, file_path, deftargettp);
 			recipe.configurations ~= ci;
 		}
 	}
 
 	// parse any sub packages after the main package has been fully parsed
 	if (auto ps = "subPackages" in json)
-		recipe.parseSubPackages(fullname, ps.opt!(Json[]));
+		recipe.parseSubPackages(fullname, ps.opt!(Json[]), file_path);
 }
 
 Json toJson(const scope ref PackageRecipe recipe)
@@ -114,7 +121,7 @@ Json toJson(const scope ref PackageRecipe recipe)
 	return ret;
 }
 
-private void parseSubPackages(ref PackageRecipe recipe, string parent_package_name, Json[] subPackagesJson)
+private void parseSubPackages(ref PackageRecipe recipe, string parent_package_name, Json[] subPackagesJson, NativePath file_path)
 {
 	enforce(!parent_package_name.canFind(":"), format("'subPackages' found in '%s'. This is only supported in the main package file for '%s'.",
 		parent_package_name, getBasePackageName(parent_package_name)));
@@ -127,13 +134,21 @@ private void parseSubPackages(ref PackageRecipe recipe, string parent_package_na
 			recipe.subPackages[i] = SubPackage(subpath, PackageRecipe.init);
 		} else {
 			PackageRecipe subinfo;
-			subinfo.parseJson(subPackageJson, parent_package_name);
+			subinfo.parseJson(subPackageJson, parent_package_name, file_path);
 			recipe.subPackages[i] = SubPackage(null, subinfo);
+		}
+
+		static if (is(typeof(subPackageJson.line)))
+		{
+			FileLocation src;
+			src.filePath = file_path;
+			src.line = cast(typeof(src.line))(subPackageJson.line + 1);
+			recipe.subPackages[i].parseSource = src;
 		}
 	}
 }
 
-private void parseJson(ref ConfigurationInfo config, Json json, string package_name, TargetType default_target_type = TargetType.library)
+private void parseJson(ref ConfigurationInfo config, Json json, string package_name, NativePath file_path, TargetType default_target_type = TargetType.library)
 {
 	config.buildSettings.targetType = default_target_type;
 
@@ -149,7 +164,7 @@ private void parseJson(ref ConfigurationInfo config, Json json, string package_n
 	}
 
 	enforce(!config.name.empty, "Configuration is missing a name.");
-	config.buildSettings.parseJson(json, package_name);
+	config.buildSettings.parseJson(json, package_name, file_path);
 }
 
 private Json toJson(const scope ref ConfigurationInfo config)
@@ -160,7 +175,7 @@ private Json toJson(const scope ref ConfigurationInfo config)
 	return ret;
 }
 
-private void parseJson(ref BuildSettingsTemplate bs, Json json, string package_name)
+private void parseJson(ref BuildSettingsTemplate bs, Json json, string package_name, NativePath file_path)
 {
 	foreach(string name, value; json)
 	{
@@ -177,11 +192,11 @@ private void parseJson(ref BuildSettingsTemplate bs, Json json, string package_n
 						pkg = package_name ~ pkg;
 					}
 					enforce(pkg !in bs.dependencies, "The dependency '"~pkg~"' is specified more than once." );
-					bs.dependencies[pkg] = Dependency.fromJson(verspec);
+					bs.dependencies[pkg] = Dependency.fromJson(verspec, file_path);
 					if (verspec.type == Json.Type.object)
 					{
 						BuildSettingsTemplate dbs;
-						dbs.parseJson(verspec, package_name);
+						dbs.parseJson(verspec, package_name, file_path);
 						bs.dependencyBuildSettings[pkg] = dbs;
 					}
 				}

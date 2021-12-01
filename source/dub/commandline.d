@@ -10,7 +10,9 @@ module dub.commandline;
 import dub.compilers.compiler;
 import dub.dependency;
 import dub.dub;
+import dub.exception;
 import dub.generators.generator;
+import dub.internal.utils : getClosestMatch, getDUBVersion, getTempFile;
 import dub.internal.vibecompat.core.file;
 import dub.internal.vibecompat.core.log;
 import dub.internal.vibecompat.data.json;
@@ -19,7 +21,6 @@ import dub.package_;
 import dub.packagemanager;
 import dub.packagesuppliers;
 import dub.project;
-import dub.internal.utils : getDUBVersion, getClosestMatch, getTempFile;
 
 import std.algorithm;
 import std.array;
@@ -230,7 +231,7 @@ struct CommandLineHandler
 	Returns:
 		A dub instance
 	*/
-	Dub prepareDub() {
+	Dub prepareDub(LoadInitiator initiator = LoadInitiator.cli) {
 		Dub dub;
 
 		if (options.bare) {
@@ -262,7 +263,7 @@ struct CommandLineHandler
 
 		// make the CWD package available so that for example sub packages can reference their
 		// parent package.
-		try dub.packageManager.getOrLoadPackage(NativePath(options.root_path));
+		try dub.packageManager.getOrLoadPackage(NativePath(options.root_path), initiator);
 		catch (Exception e) { logDiagnostic("No valid package found in current working directory: %s", e.msg); }
 
 		return dub;
@@ -502,6 +503,11 @@ int runDubCommandLine(string[] args)
 	catch (Throwable e) {
 		logError("%s", e.msg);
 		logDebug("Full exception: %s", e.toString().sanitize);
+		if (auto sub = cast(PackageLoadException) e)
+		{
+			foreach (ref initiator; sub.initiators)
+				logError("\tfrom package %s", initiator.toString());
+		}
 		return 2;
 	}
 }
@@ -1063,7 +1069,7 @@ abstract class PackageBuildCommand : Command {
 
 		auto pack = ver == ""
 			? dub.packageManager.getLatestPackage(package_name)
-			: dub.packageManager.getBestPackage(package_name, ver);
+			: dub.packageManager.getBestPackage(package_name, ver, LoadInitiator.cli);
 
 		enforce(pack, format!"Failed to find a package named '%s%s' locally."(package_name,
 			ver == "" ? "" : ("@" ~ ver)
@@ -1173,7 +1179,7 @@ class GenerateCommand : PackageBuildCommand {
 
 		logDiagnostic("Generating using %s", m_generator);
 		dub.generateProject(m_generator, gensettings);
-		if (m_buildType == "ddox") dub.runDdox(gensettings.run, app_args);
+		if (m_buildType == "ddox") dub.runDdox(LoadInitiator.cli, gensettings.run, app_args);
 		return 0;
 	}
 }
@@ -1221,13 +1227,13 @@ class BuildCommand : GenerateCommand {
 		if (!m_nonInteractive)
 		{
 			const packageParts = splitPackageName(free_args[0]);
-			if (auto rc = fetchMissingPackages(dub, packageParts))
+			if (auto rc = fetchMissingPackages(dub, packageParts, LoadInitiator.cli))
 				return rc;
 		}
 		return super.execute(dub, free_args, app_args);
 	}
 
-	private int fetchMissingPackages(Dub dub, in PackageAndVersion packageParts)
+	private int fetchMissingPackages(Dub dub, in PackageAndVersion packageParts, LoadInitiator initiator)
 	{
 
 		static bool input(string caption, bool default_value = true) {
@@ -1280,7 +1286,7 @@ class BuildCommand : GenerateCommand {
 			dep = Dependency(p.version_);
 		}
 
-		dub.fetch(packageParts.name, dep, dub.defaultPlacementLocation, FetchOptions.none);
+		dub.fetch(packageParts.name, dep, dub.defaultPlacementLocation, FetchOptions.none, initiator);
 		return 0;
 	}
 }
@@ -1482,7 +1488,7 @@ class LintCommand : PackageBuildCommand {
 		if (m_config) args ~= ["--config", m_config];
 
 		setupVersionPackage(dub, str_package_info);
-		dub.lintProject(args ~ app_args);
+		dub.lintProject(args ~ app_args, LoadInitiator.cli);
 		return 0;
 	}
 }
@@ -1647,14 +1653,14 @@ class CleanCommand : Command {
 			bool any_error = false;
 
 			foreach (p; dub.packageManager.getPackageIterator()) {
-				try dub.cleanPackage(p.path);
+				try dub.cleanPackage(p.path, LoadInitiator.cli);
 				catch (Exception e) {
 					logWarn("Failed to clean package %s at %s: %s", p.name, p.path, e.msg);
 					any_error = true;
 				}
 
 				foreach (sp; p.subPackages.filter!(sp => !sp.path.empty)) {
-					try dub.cleanPackage(p.path ~ sp.path);
+					try dub.cleanPackage(p.path ~ sp.path, LoadInitiator.cli);
 					catch (Exception e) {
 						logWarn("Failed to clean sub package of %s at %s: %s", p.name, p.path ~ sp.path, e.msg);
 						any_error = true;
@@ -1664,7 +1670,7 @@ class CleanCommand : Command {
 
 			if (any_error) return 1;
 		} else {
-			dub.cleanPackage(dub.rootPath);
+			dub.cleanPackage(dub.rootPath, LoadInitiator.cli);
 		}
 
 		return 0;
@@ -1833,13 +1839,13 @@ class FetchCommand : FetchRemoveCommand {
 		if (m_version.length) { // remove then --version removed
 			enforceUsage(!name.canFindVersionSplitter, "Double version spec not allowed.");
 			logWarn("The '--version' parameter was deprecated, use %s@%s. Please update your scripts.", name, m_version);
-			dub.fetch(name, Dependency(m_version), location, fetchOpts);
+			dub.fetch(name, Dependency(m_version), location, fetchOpts, LoadInitiator.cli);
 		} else if (name.canFindVersionSplitter) {
 			const parts = name.splitPackageName;
-			dub.fetch(parts.name, Dependency(parts.version_), location, fetchOpts);
+			dub.fetch(parts.name, Dependency(parts.version_), location, fetchOpts, LoadInitiator.cli);
 		} else {
 			try {
-				dub.fetch(name, Dependency(">=0.0.0"), location, fetchOpts);
+				dub.fetch(name, Dependency(">=0.0.0"), location, fetchOpts, LoadInitiator.cli);
 				logInfo(
 					"Please note that you need to use `dub run <pkgname>` " ~
 					"or add it to dependencies of your package to actually use/run it. " ~
@@ -1848,7 +1854,7 @@ class FetchCommand : FetchRemoveCommand {
 			catch(Exception e){
 				logInfo("Getting a release version failed: %s", e.msg);
 				logInfo("Retry with ~master...");
-				dub.fetch(name, Dependency("~master"), location, fetchOpts);
+				dub.fetch(name, Dependency("~master"), location, fetchOpts, LoadInitiator.cli);
 			}
 		}
 		return 0;
@@ -2037,7 +2043,7 @@ class AddLocalCommand : RegistrationCommand {
 	{
 		enforceUsage(free_args.length == 1 || free_args.length == 2, "Expecting one or two arguments.");
 		string ver = free_args.length == 2 ? free_args[1] : null;
-		dub.addLocalPackage(free_args[0], ver, m_system);
+		dub.addLocalPackage(free_args[0], ver, m_system, LoadInitiator.cli);
 		return 0;
 	}
 }
@@ -2379,7 +2385,7 @@ class DustmiteCommand : PackageBuildCommand {
 				}
 			}
 
-			void fixPathDependencies(ref PackageRecipe recipe, NativePath base_path)
+			void fixPathDependencies(ref PackageRecipe recipe, NativePath base_path, LoadInitiator initiator)
 			{
 				foreach (name, ref dep; recipe.buildSettings.dependencies)
 					fixPathDependency(name, dep);
@@ -2391,10 +2397,10 @@ class DustmiteCommand : PackageBuildCommand {
 				foreach (ref subp; recipe.subPackages)
 					if (subp.path.length) {
 						auto sub_path = base_path ~ NativePath(subp.path);
-						auto pack = prj.packageManager.getOrLoadPackage(sub_path);
-						fixPathDependencies(pack.recipe, sub_path);
+						auto pack = prj.packageManager.getOrLoadPackage(sub_path, initiator);
+						fixPathDependencies(pack.recipe, sub_path, LoadInitiator(pack, subp.parseSource, true));
 						pack.storeInfo(sub_path);
-					} else fixPathDependencies(subp.recipe, base_path);
+					} else fixPathDependencies(subp.recipe, base_path, LoadInitiator(initiator.package_, subp.parseSource, true));
 			}
 
 			bool[string] visited;
@@ -2407,7 +2413,7 @@ class DustmiteCommand : PackageBuildCommand {
 				copyFolderRec(pack.path, dst_path);
 
 				// adjust all path based dependencies
-				fixPathDependencies(pack.recipe, dst_path);
+				fixPathDependencies(pack.recipe, dst_path, LoadInitiator(pack_));
 
 				// overwrite package description file with additional version information
 				pack.storeInfo(dst_path);
