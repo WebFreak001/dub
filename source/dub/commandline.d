@@ -432,7 +432,7 @@ int runDubCommandLine(string[] args)
 	try handler.prepareOptions(common_args);
 	catch (Throwable e) {
 		logError("Error processing arguments: %s", e.msg);
-		logDiagnostic("Full exception: %s", e.toString().sanitize);
+		logError("Full exception: %s", e.toString().sanitize);
 		logInfo("Run 'dub help' for usage information.");
 		return 1;
 	}
@@ -455,8 +455,8 @@ int runDubCommandLine(string[] args)
 		cmd = handler.prepareCommand(command_name_argument.value, command_args);
 	} catch (Throwable e) {
 		logError("Error processing arguments: %s", e.msg);
-		logDiagnostic("Full exception: %s", e.toString().sanitize);
-		logInfo("Run 'dub help' for usage information.");
+		logError("Full exception: %s", e.toString().sanitize);
+		logError("Run 'dub help' for usage information.");
 		return 1;
 	}
 
@@ -495,13 +495,13 @@ int runDubCommandLine(string[] args)
 	try return cmd.execute(dub, remaining_args, command_args.appArgs);
 	catch (UsageException e) {
 		logError("%s", e.msg);
-		logDebug("Full exception: %s", e.toString().sanitize);
+		logError("Full exception: %s", e.toString().sanitize);
 		logInfo(`Run "dub %s -h" for more information about the "%s" command.`, cmd.name, cmd.name);
 		return 1;
 	}
 	catch (Throwable e) {
 		logError("%s", e.msg);
-		logDebug("Full exception: %s", e.toString().sanitize);
+		logError("Full exception: %s", e.toString().sanitize);
 		return 2;
 	}
 }
