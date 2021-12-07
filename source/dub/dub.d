@@ -479,6 +479,7 @@ class Dub {
 	/// ditto
 	void loadSingleFilePackage(string path)
 	{
+		debug { import std.stdio : writeln; try { writeln("loadSingleFilePackage string: ", path); } catch (Exception) {} }
 		loadSingleFilePackage(NativePath(path));
 	}
 
