@@ -691,6 +691,7 @@ class Dub {
 			string custommodname;
 			if (!custom_main_file.empty) {
 				import std.path;
+				debug { import std.stdio : writeln; try { writeln("custom_main_file: ", custom_main_file.relativeTo(m_project.rootPackage.path).toNativeString()); } catch (Exception) {} }
 				tcinfo.sourceFiles[""] ~= custom_main_file.relativeTo(m_project.rootPackage.path).toNativeString();
 				tcinfo.importPaths[""] ~= custom_main_file.parentPath.toNativeString();
 				custommodname = custom_main_file.head.name.baseName(".d");
@@ -739,6 +740,7 @@ class Dub {
 			auto escapedMainFile = mainfile.toNativeString().replace("$", "$$");
 			// generate main file
 			tcinfo.sourceFiles[""] ~= escapedMainFile;
+			debug { import std.stdio : writeln; try { writeln("escapedMainFile: ", escapedMainFile); } catch (Exception) {} }
 			tcinfo.mainSourceFile = escapedMainFile;
 
 			if (!m_dryRun && regenerateMainFile) {
