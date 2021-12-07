@@ -1403,8 +1403,6 @@ class TestCommand : PackageBuildCommand {
 		settings.runArgs = app_args;
 		settings.single = m_single;
 
-		debug { import std.stdio : writeln; try { writeln("Passed in GeneratorSettings: ", settings); } catch (Exception) {} }
-
 		dub.testProject(settings, m_buildConfig, NativePath(m_mainFile));
 		return 0;
 	}
