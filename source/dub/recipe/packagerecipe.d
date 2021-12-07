@@ -232,6 +232,12 @@ struct BuildSettingsTemplate {
 			dst.addSourceFiles(dst.mainSourceFile);
 		}
 		debug { import std.stdio : writeln; try { writeln("this.sourceFiles: ", this.sourceFiles); } catch (Exception) {} }
+		foreach (k, v; this.sourceFiles)
+			foreach (s; v)
+			{
+				import std.algorithm;
+				assert(!s.canFind("//"));
+			}
 
 		string[] collectFiles(in string[][string] paths_map, string pattern)
 		{
