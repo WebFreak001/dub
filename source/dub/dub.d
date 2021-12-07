@@ -720,6 +720,7 @@ class Dub {
 						}
 						continue;
 					}
+					debug { import std.stdio : writeln; try { writeln("determineModuleName ", lbuildsettings, " - ", file, " - ", m_project.rootPackage.path); } catch (Exception) {} }
 					import_modules ~= dub.internal.utils.determineModuleName(lbuildsettings, NativePath(file), m_project.rootPackage.path);
 				}
 			}
