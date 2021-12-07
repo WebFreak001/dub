@@ -216,6 +216,16 @@ struct BuildSettingsTemplate {
 	BuildRequirements[string] buildRequirements;
 	BuildOptions[string] buildOptions;
 
+	invariant
+	{
+		foreach (k, v; this.sourceFiles)
+			foreach (s; v)
+			{
+				import std.algorithm;
+				assert(!s.canFind("//"));
+			}
+	}
+
 
 	/// Constructs a BuildSettings object from this template.
 	void getPlatformSettings(ref BuildSettings dst, in BuildPlatform platform, NativePath base_path)
