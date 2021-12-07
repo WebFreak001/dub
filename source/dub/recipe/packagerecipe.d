@@ -228,6 +228,7 @@ struct BuildSettingsTemplate {
 			auto p = NativePath(this.mainSourceFile);
 			p.normalize();
 			dst.mainSourceFile = p.toNativeString();
+			debug { import std.stdio : writeln; try { writeln("addSourceFile mainSourceFile ", dst.mainSourceFile); } catch (Exception) {} }
 			dst.addSourceFiles(dst.mainSourceFile);
 		}
 
@@ -244,7 +245,11 @@ struct BuildSettingsTemplate {
 
 			foreach (suffix, paths; paths_map) {
 				if (!platform.matchesSpecification(suffix))
+				{
+					debug { import std.stdio : writeln; try { writeln("skip ", suffix, ", ", paths); } catch (Exception) {} }
 					continue;
+				}
+				debug { import std.stdio : writeln; try { writeln("check ", suffix, ", ", paths); } catch (Exception) {} }
 
 				foreach (spath; paths) {
 					enforce(!spath.empty, "Paths must not be empty strings.");
@@ -261,16 +266,22 @@ struct BuildSettingsTemplate {
 					}
 
 					auto pstr = path.toNativeString();
+					debug { import std.stdio : writeln; try { writeln("iterate ", pstr); } catch (Exception) {} }
 					foreach (d; dirEntries(pstr, pattern, SpanMode.depth)) {
 						import std.path : baseName, pathSplitter;
 						import std.algorithm.searching : canFind;
 						// eliminate any hidden files, or files in hidden directories. But always include
 						// files that are listed inside hidden directories that are specifically added to
 						// the project.
+						debug { import std.stdio : writeln; try { writeln("check ", d); } catch (Exception) {} }
 						if (d.isDir || pathSplitter(d.name[pstr.length .. $])
 								   .canFind!(name => name.length && name[0] == '.'))
+								   {
+						debug { import std.stdio : writeln; try { writeln("skipped."); } catch (Exception) {} }
 							continue;
+								   }
 						auto src = NativePath(d.name).relativeTo(base_path);
+						debug { import std.stdio : writeln; try { writeln(d.name, " relativeTo ", base_path, " = ", src.toNativeString); } catch (Exception) {} }
 						files ~= src.toNativeString();
 					}
 				}
@@ -280,6 +291,7 @@ struct BuildSettingsTemplate {
 		}
 
  		// collect source files
+		debug { import std.stdio : writeln; try { writeln("collect files ", sourcePaths, ":"); } catch (Exception) {} }
 		dst.addSourceFiles(collectFiles(sourcePaths, "*.d"));
 		auto sourceFiles = dst.sourceFiles.sort();
 
