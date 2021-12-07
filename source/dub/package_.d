@@ -381,10 +381,12 @@ class Package {
 	BuildSettings getBuildSettings(in BuildPlatform platform, string config)
 	const {
 		BuildSettings ret;
+		debug { import std.stdio : writeln; try { writeln("m_info: ", m_info); } catch (Exception) { writeln("exception printing !!!!"); } }
 		m_info.buildSettings.getPlatformSettings(ret, platform, this.path);
 		bool found = false;
 		foreach(ref conf; m_info.configurations){
 			if( conf.name != config ) continue;
+			debug { import std.stdio : writeln; try { writeln("conf: ", conf); } catch (Exception) { writeln("exception printing !!!!"); } }
 			conf.buildSettings.getPlatformSettings(ret, platform, this.path);
 			found = true;
 			break;

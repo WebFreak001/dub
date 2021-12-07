@@ -653,7 +653,6 @@ class Project {
 			logDebug("Gathering build settings for %s (%s)", pkg.name, configs[pkg.name]);
 
 			auto psettings = pkg.getBuildSettings(gsettings.platform, configs[pkg.name]);
-			debug { import std.stdio : writeln; try { writeln("getBuildSettings: ", psettings); } catch (Exception) {} }
 			if (psettings.targetType != TargetType.none) {
 				if (shallow && pkg !is m_rootPackage)
 					psettings.sourceFiles = null;
