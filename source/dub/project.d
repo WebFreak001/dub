@@ -645,7 +645,7 @@ class Project {
 
 		auto configs = getPackageConfigs(gsettings.platform, config);
 
-		foreach (Package pkg; this.getTopologicalPackageList(false, root_package, configs)) {
+		foreach (pkg; this.getTopologicalPackageList(false, root_package, configs)) {
 			auto pkg_path = pkg.path.toNativeString();
 			dst.addVersions(["Have_" ~ stripDlangSpecialChars(pkg.name)]);
 
