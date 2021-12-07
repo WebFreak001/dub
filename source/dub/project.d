@@ -1252,6 +1252,7 @@ private string[] processVars(bool glob = false)(in Project project, in Package p
 {
 	auto ret = appender!(string[])();
 	processVars!glob(ret, project, pack, gsettings, vars, are_paths, extraVers);
+	debug { import std.stdio : writeln; try { writeln("glob processVars ", vars, " -> ", ret.data); } catch (Exception) {} }
 	return ret.data;
 }
 private void processVars(bool glob = false)(ref Appender!(string[]) dst, in Project project, in Package pack, in GeneratorSettings gsettings, string[] vars, bool are_paths = false, in string[string][] extraVers = null)
