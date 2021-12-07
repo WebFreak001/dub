@@ -682,6 +682,7 @@ class Dub {
 			logInfo(`Generating test runner configuration '%s' for '%s' (%s).`, test_config, config, lbuildsettings.targetType);
 
 			BuildSettingsTemplate tcinfo = m_project.rootPackage.recipe.getConfiguration(config).buildSettings;
+			debug { import std.stdio : writeln; try { writeln("generated tcinfo: ", tcinfo); } catch (Exception) {} }
 			tcinfo.targetType = TargetType.executable;
 			tcinfo.targetName = test_config;
 
