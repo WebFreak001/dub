@@ -772,6 +772,7 @@ class Dub {
 					});
 				}
 			}
+			debug { import std.stdio : writeln; try { writeln(readText(mainfile.toNativeString)); } catch (Exception) {} }
 			m_project.rootPackage.recipe.configurations ~= ConfigurationInfo(test_config, tcinfo);
 			m_project = new Project(m_packageManager, m_project.rootPackage);
 
