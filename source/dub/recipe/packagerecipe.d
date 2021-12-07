@@ -231,6 +231,7 @@ struct BuildSettingsTemplate {
 			debug { import std.stdio : writeln; try { writeln("addSourceFile mainSourceFile ", dst.mainSourceFile); } catch (Exception) {} }
 			dst.addSourceFiles(dst.mainSourceFile);
 		}
+		debug { import std.stdio : writeln; try { writeln("this.sourceFiles: ", this.sourceFiles); } catch (Exception) {} }
 
 		string[] collectFiles(in string[][string] paths_map, string pattern)
 		{
