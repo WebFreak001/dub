@@ -429,7 +429,9 @@ class Dub {
 		import std.file : mkdirRecurse, readText;
 		import std.path : baseName, stripExtension;
 
+		debug { import std.stdio : writeln; try { writeln("loadSingleFilePackage path: ", path); } catch (Exception) {} }
 		path = makeAbsolute(path);
+		debug { import std.stdio : writeln; try { writeln("absoluted path: ", path); } catch (Exception) {} }
 
 		string file_content = readText(path.toNativeString());
 
