@@ -679,6 +679,13 @@ class Dub {
 			m_project.saveSelections();
 	}
 
+	DependencyVersionResolver.ResolveExplanation explainDependencies()
+	{
+		auto resolver = new DependencyVersionResolver(
+			this, UpgradeOptions.init, m_project.rootPackage, m_project.selections);
+		return resolver.explain(null);
+	}
+
 	/** Generate project files for a specified generator.
 
 		Any existing project files will be overridden.
@@ -1566,6 +1573,13 @@ private class DependencyVersionResolver : DependencyResolver!(Dependency, Depend
 			m_packagesToUpgrade[name] = true;
 		return super.resolve(TreeNode(m_rootPackage.name, Dependency(m_rootPackage.version_)),
 			(m_options & UpgradeOptions.dryRun) == 0);
+	}
+
+	ResolveExplanation explain(string[] filter)
+	{
+		foreach (name; filter)
+			m_packagesToUpgrade[name] = true;
+		return super.explain(TreeNode(m_rootPackage.name, Dependency(m_rootPackage.version_)));
 	}
 
 	protected bool isFixedPackage(string pack)

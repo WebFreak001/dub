@@ -66,6 +66,7 @@ CommandGroup[] getCommands() @safe pure nothrow
 			new AddLocalCommand,
 			new RemoveLocalCommand,
 			new ListCommand,
+			new SelectCommand,
 			new SearchCommand,
 			new AddOverrideCommand,
 			new RemoveOverrideCommand,
@@ -256,8 +257,9 @@ unittest {
 
 	assert(handler.commandNames == ["init", "run", "build", "test", "lint", "generate",
 		"describe", "clean", "dustmite", "fetch", "add", "remove",
-		"upgrade", "add-path", "remove-path", "add-local", "remove-local", "list", "search",
-		"add-override", "remove-override", "list-overrides", "clean-caches", "convert"]);
+		"upgrade", "add-path", "remove-path", "add-local", "remove-local", "list", "select",
+		"search", "add-override", "remove-override", "list-overrides", "clean-caches",
+		"convert"]);
 }
 
 /// It sets the cwd as root_path by default
@@ -2164,6 +2166,117 @@ class ListCommand : Command {
 				logInfoNoTag("  %s %s: %s", p.name.color(Mode.bold), p.version_, p.path.toNativeString());
 		}
 		logInfo("");
+		return 0;
+	}
+}
+
+class SelectCommand : PackageBuildCommand {
+	this() @safe pure nothrow
+	{
+		this.name = "select";
+		this.argumentsPattern = "(no args)|<package> <version|path>|<package> <repository> <commit>";
+		this.description = "Management for dependency selections";
+		this.helpText = [
+			"Shows the full dependency tree if executed without arguments, highlighting "~
+			"dependencies that are conflicting or causing other errors."
+			// TODO: add subcommand to select specific versions of dependencies
+			// (write into dub.selections.json)
+		];
+	}
+	override int execute(Dub dub, string[] free_args, string[] app_args)
+	{
+		enforceUsage(free_args.length == 0
+			|| free_args.length == 2
+			|| free_args.length == 3, "Expecting zero or two or three extra arguments.");
+		enforce(loadCwdPackage(dub, true), "Failed to load package.");
+
+		if (free_args.length == 2)
+			return selectPackage(dub, free_args[0], free_args[1]);
+		else if (free_args.length == 3)
+			return selectPackageScm(dub, free_args[0], free_args[1], free_args[2]);
+
+		auto explainResult = dub.explainDependencies();
+
+		bool hasConflicting, hasFailed, hasPurged;
+
+		bool[string] visited;
+		void dump(string pack, string indent, string annotation)
+		{
+			if (auto info = pack in explainResult.parts) {
+				if (info.conflicting) {
+					annotation = annotation.color(Color.red);
+					hasConflicting = true;
+				} else if (info.failedLoad) {
+					annotation = annotation.color(Color.yellow);
+					hasFailed = true;
+				} else {
+					annotation = annotation.color(Mode.faint);
+				}
+
+				if (info.purgedOptional) {
+					annotation ~= " (purged)";
+					hasPurged = true;
+				}
+			}
+			logInfoNoTag("%s%s %s", indent, pack.color(Mode.bold), annotation);
+			if (pack in visited) {
+				if (explainResult.tree[pack].length > 0)
+					logInfoNoTag("%s  ...", indent);
+				return;
+			}
+			visited[pack] = true;
+			indent ~= "  ";
+			foreach (child; explainResult.tree[pack])
+				dump(child.pack, indent, child.configs.toString());
+		}
+		logInfoNoTag("Dependency Tree:");
+		dump(explainResult.root, "", "[root]");
+
+		logInfo("");
+
+		tagWidth.push(7);
+		dub.project.validate();
+
+		if (hasConflicting)
+			logError("some packages have %s version specifications", "conflicting".color(Color.red));
+		if (hasFailed)
+			logError("some packages %s", "failed to load".color(Color.yellow));
+		if (hasPurged)
+			logInfo("Hint", Color.light_blue, "packages marked as (purged) were marked as optional and not included");
+		tagWidth.pop();
+		return 0;
+	}
+
+	protected int selectPackage(Dub dub, string pack, string versionSpec)
+	{
+		bool assumeFile;
+		if (versionSpec.startsWith("~/")) {
+			versionSpec = versionSpec.expandTilde;
+			assumeFile = true;
+		}
+
+		Dependency dep;
+		if (existsFile(versionSpec)) {
+			dep = Dependency(NativePath(versionSpec));
+		} else if (assumeFile) {
+			logError("Folder %s not found", versionSpec.color(Mode.bold));
+		} else {
+			dep = Dependency(versionSpec);
+		}
+
+		return updateAndSave(dub, pack, dep);
+	}
+
+	protected int selectPackageScm(Dub dub, string pack, string remote, string ref_)
+	{
+		Dependency dep = Dependency(Repository(remote, ref_));
+		return updateAndSave(dub, pack, dep);
+	}
+
+	protected int updateAndSave(Dub dub, string pack, Dependency dep)
+	{
+		dub.project.selections.selectVersion(pack, dep);
+		dub.project.saveSelections();
 		return 0;
 	}
 }

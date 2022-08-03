@@ -10,7 +10,7 @@ module dub.dependencyresolver;
 import dub.dependency;
 import dub.internal.logging;
 
-import std.algorithm : all, canFind, filter, map, sort;
+import std.algorithm : all, canFind, filter, map, sort, uniq;
 import std.array : appender, array, join;
 import std.conv : to;
 import std.exception : enforce;
@@ -101,14 +101,13 @@ class DependencyResolver(CONFIGS, CONFIG) {
 
 	CONFIG[string] resolve(TreeNode root, bool throw_on_failure = true)
 	{
-		auto rootbase = root.pack.basePackageName;
-
-		// build up the dependency graph, eliminating as many configurations/
-		// versions as possible
 		ResolveContext context;
-		context.configs[rootbase] = [ResolveConfig(root.config, true)];
-		ulong loop_counter = this.loop_limit;
-		constrain(root, context, loop_counter);
+		auto rootbase = root.pack.basePackageName;
+		Exception[] errors;
+		evaluateAllConstraints(root, context, errors);
+
+		if (errors.length)
+			throw errors[0];
 
 		// remove any non-default optional dependencies
 		purgeOptionalDependencies(root, context.result);
@@ -122,6 +121,68 @@ class DependencyResolver(CONFIGS, CONFIG) {
 			logDiagnostic("  %s: %s", d, context.result[d]);
 
 		return context.result;
+	}
+
+	ResolveExplanation explain(TreeNode root)
+	{
+		ResolveExplanation result;
+
+		ResolveContext context;
+		Exception[] errors;
+		evaluateAllConstraints(root, context, errors);
+
+		foreach (key, value; context.result) {
+			result.parts[key] = ExplanationPart(value);
+			result.tree[key] = getChildren(TreeNode(key, value))
+				.array
+				.sort!"a.pack<b.pack"
+				.uniq
+				.array;
+		}
+		result.root = root.pack;
+
+		foreach (error; errors) {
+			if (auto e = cast(ResolveException)error) {
+				result.markConflicting(e.failbase);
+			} else if (auto e = cast(DependencyLoadException)error) {
+				result.markFailedLoad(e.dependency.pack);
+			}
+		}
+
+		bool[string] required;
+		bool[string] visited;
+
+		void markRecursively(TreeNode node)
+		{
+			if (node.pack in visited) return;
+			visited[node.pack] = true;
+			required[node.pack.basePackageName] = true;
+			foreach (dep; getChildren(node).filter!(dep => dep.depType != DependencyType.optional))
+				if (auto dp = dep.pack.basePackageName in context.result)
+					markRecursively(TreeNode(dep.pack, *dp));
+		}
+
+		// recursively mark all required dependencies of the concrete dependency tree
+		markRecursively(root);
+
+		// mark non-required configurations (removed optional ones)
+		foreach (p; context.result.keys.dup)
+			if (p.basePackageName !in required)
+				result.addRemovedOptional(p);
+
+		return result;
+	}
+
+	private void evaluateAllConstraints(TreeNode root, ref ResolveContext context,
+		ref Exception[] errors)
+	{
+		auto rootbase = root.pack.basePackageName;
+
+		// build up the dependency graph, eliminating as many configurations/
+		// versions as possible
+		context.configs[rootbase] = [ResolveConfig(root.config, true)];
+		ulong loop_counter = this.loop_limit;
+		constrain(root, context, loop_counter, errors);
 	}
 
 	protected abstract CONFIG[] getAllConfigs(string pack);
@@ -166,17 +227,44 @@ class DependencyResolver(CONFIGS, CONFIG) {
 		}
 	}
 
+	public static struct ExplanationPart {
+		CONFIG config;
+		bool purgedOptional;
+		bool conflicting;
+		bool failedLoad;
+	}
+
+	public static struct ResolveExplanation {
+		ExplanationPart[string] parts;
+		TreeNodes[][string] tree;
+		string root;
+
+		void addRemovedOptional(string s) {
+			parts[s].purgedOptional = true;
+		}
+
+		void markConflicting(string s) {
+			parts[s].conflicting = true;
+		}
+
+		void markFailedLoad(string s) {
+			parts[s].failedLoad = true;
+		}
+	}
+
 
 	/** Starting with a single node, fills `context` with a minimized set of
 		configurations that form valid solutions.
 	*/
-	private void constrain(TreeNode n, ref ResolveContext context, ref ulong max_iterations)
+	private void constrain(TreeNode n, ref ResolveContext context, ref ulong max_iterations,
+		ref Exception[] errors)
 	{
 		auto base = n.pack.basePackageName;
 		assert(base in context.configs);
 		if (context.isVisited(n.pack)) return;
 		context.setVisited(n.pack);
 		context.result[base] = n.config;
+		context.result[n.pack] = n.config;
 		foreach (j, ref sc; context.configs[base])
 			sc.included = sc.config == n.config;
 
@@ -210,12 +298,12 @@ class DependencyResolver(CONFIGS, CONFIG) {
 
 			if (!any_config && dep.depType == DependencyType.required) {
 				if ((*di).length)
-					throw new ResolveException(n, dep, context);
-				else throw new DependencyLoadException(n, dep);
+					errors ~= new ResolveException(n, dep, context);
+				else errors ~= new DependencyLoadException(n, dep);
 			}
 		}
 
-		constrainDependencies(n, dependencies, 0, context, max_iterations);
+		constrainDependencies(n, dependencies, 0, context, max_iterations, errors);
 	}
 
 	/** Recurses back into `constrain` while recursively going through `n`'s
@@ -226,7 +314,7 @@ class DependencyResolver(CONFIGS, CONFIG) {
 		propagate.
 	*/
 	private void constrainDependencies(TreeNode n, TreeNodes[] dependencies, size_t depidx,
-		ref ResolveContext context, ref ulong max_iterations)
+		ref ResolveContext context, ref ulong max_iterations, ref Exception[] errors)
 	{
 		if (depidx >= dependencies.length) return;
 
@@ -241,36 +329,34 @@ class DependencyResolver(CONFIGS, CONFIG) {
 		auto depbase = dep.pack.basePackageName;
 		auto depconfigs = context.configs[depbase];
 
-		Exception first_err;
-
 		// try each configuration/version of the current dependency
 		foreach (i, c; depconfigs) {
 			if (c.included) {
-				try {
-					// try the configuration on a cloned context
-					auto subcontext = context.clone;
-					constrain(TreeNode(dep.pack, c.config), subcontext, max_iterations);
-					constrainDependencies(n, dependencies, depidx+1, subcontext, max_iterations);
-					// if a branch succeeded, replace the current context
-					// with the one from the branch and return
-					context = subcontext;
+				// try the configuration on a cloned context
+				auto subcontext = context.clone;
+				Exception[] suberrs;
+				constrain(TreeNode(dep.pack, c.config), subcontext, max_iterations, suberrs);
+				constrainDependencies(n, dependencies, depidx+1, subcontext, max_iterations, suberrs);
+				// if a branch succeeded, replace the current context
+				// with the one from the branch and return
+				context = subcontext;
+				if (suberrs.length == 0)
 					return;
-				} catch (Exception e) {
-					if (!first_err) first_err = e;
-				}
+				else
+					errors ~= suberrs;
 			}
 		}
 
 		// ignore unsatisfiable optional dependencies
 		if (dep.depType != DependencyType.required) {
 			auto subcontext = context.clone;
-			constrainDependencies(n, dependencies, depidx+1, subcontext, max_iterations);
+			constrainDependencies(n, dependencies, depidx+1, subcontext, max_iterations, errors);
 			context = subcontext;
 			return;
 		}
 
 		// report the first error encountered to the user
-		if (first_err) throw first_err;
+		if (errors.length) return;
 
 		// should have thrown in constrainRec before reaching this
 		assert(false, format("Got no configuration for dependency %s %s of %s %s!?",
@@ -306,6 +392,7 @@ class DependencyResolver(CONFIGS, CONFIG) {
 		import std.typecons : tuple;
 
 		string failedNode;
+		string failbase;
 
 		this(TreeNode parent, TreeNodes dep, const scope ref ResolveContext context, string file = __FILE__, size_t line = __LINE__)
 		{
@@ -314,7 +401,7 @@ class DependencyResolver(CONFIGS, CONFIG) {
 
 			this.failedNode = dep.pack;
 
-			auto failbase = failedNode.basePackageName;
+			failbase = failedNode.basePackageName;
 
 			// get the list of all dependencies to the failed package
 			auto deps = context.visited.byKey
