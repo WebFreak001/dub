@@ -2174,7 +2174,7 @@ class SelectCommand : PackageBuildCommand {
 	this() @safe pure nothrow
 	{
 		this.name = "select";
-		this.argumentsPattern = "(no args)|<package> <version|path>|<package> <repository> <commit>";
+		this.argumentsPattern = "[<package> <version|path>|<package> <repository> <commit>]";
 		this.description = "Management for dependency selections";
 		this.helpText = [
 			"Shows the full dependency tree if executed without arguments, highlighting "~
@@ -2187,7 +2187,7 @@ class SelectCommand : PackageBuildCommand {
 	{
 		enforceUsage(free_args.length == 0
 			|| free_args.length == 2
-			|| free_args.length == 3, "Expecting zero or two or three extra arguments.");
+			|| free_args.length == 3, "Expecting either zero, two, or three extra arguments.");
 		enforce(loadCwdPackage(dub, true), "Failed to load package.");
 
 		if (free_args.length == 2)
