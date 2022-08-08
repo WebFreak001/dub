@@ -66,6 +66,7 @@ CommandGroup[] getCommands() @safe pure nothrow
 			new AddLocalCommand,
 			new RemoveLocalCommand,
 			new ListCommand,
+			new ExplainCommand,
 			new SelectCommand,
 			new SearchCommand,
 			new AddOverrideCommand,
@@ -255,11 +256,12 @@ unittest {
 	CommandLineHandler handler;
 	handler.commandGroups = getCommands();
 
-	assert(handler.commandNames == ["init", "run", "build", "test", "lint", "generate",
-		"describe", "clean", "dustmite", "fetch", "add", "remove",
-		"upgrade", "add-path", "remove-path", "add-local", "remove-local", "list", "select",
-		"search", "add-override", "remove-override", "list-overrides", "clean-caches",
-		"convert"]);
+	assert(handler.commandNames == ["init", "run", "build", "test", "lint",
+		"generate", "describe", "clean", "dustmite", "fetch", "add", "remove",
+		"upgrade", "add-path", "remove-path", "add-local", "remove-local",
+		"list", "explain", "select", "search", "add-override",
+		"remove-override", "list-overrides", "clean-caches", "convert"
+	]);
 }
 
 /// It sets the cwd as root_path by default
@@ -2170,30 +2172,26 @@ class ListCommand : Command {
 	}
 }
 
-class SelectCommand : PackageBuildCommand {
+class ExplainCommand : PackageBuildCommand {
 	this() @safe pure nothrow
 	{
-		this.name = "select";
-		this.argumentsPattern = "[<package> <version|path>|<package> <repository> <commit>]";
-		this.description = "Management for dependency selections";
+		this.name = "explain";
+		this.argumentsPattern = "";
+		this.description = "Explains the dependency tree, optionally filtering for a package";
 		this.helpText = [
 			"Shows the full dependency tree if executed without arguments, highlighting "~
-			"dependencies that are conflicting or causing other errors."
-			// TODO: add subcommand to select specific versions of dependencies
-			// (write into dub.selections.json)
+			"dependencies that are conflicting or causing other errors.",
+			"",
+			"Running with a package argument will filter the tree to only show packages "~
+			"which depend on that package directly or indirectly. This can be used to "~
+			"explain why a certain dependency is included."
 		];
 	}
 	override int execute(Dub dub, string[] free_args, string[] app_args)
 	{
-		enforceUsage(free_args.length == 0
-			|| free_args.length == 2
-			|| free_args.length == 3, "Expecting either zero, two, or three extra arguments.");
+		enforceUsage(free_args.length == 0, "Expecting no extra arguments.");
 		enforce(loadCwdPackage(dub, true), "Failed to load package.");
-
-		if (free_args.length == 2)
-			return selectPackage(dub, free_args[0], free_args[1]);
-		else if (free_args.length == 3)
-			return selectPackageScm(dub, free_args[0], free_args[1], free_args[2]);
+		tagWidth.push(7);
 
 		auto explainResult = dub.explainDependencies();
 
@@ -2234,7 +2232,6 @@ class SelectCommand : PackageBuildCommand {
 
 		logInfo("");
 
-		tagWidth.push(7);
 		dub.project.validate();
 
 		if (hasConflicting)
@@ -2245,6 +2242,64 @@ class SelectCommand : PackageBuildCommand {
 			logInfo("Hint", Color.light_blue, "packages marked as (purged) were marked as optional and not included");
 		tagWidth.pop();
 		return 0;
+	}
+
+	protected int selectPackage(Dub dub, string pack, string versionSpec)
+	{
+		bool assumeFile;
+		if (versionSpec.startsWith("~/")) {
+			versionSpec = versionSpec.expandTilde;
+			assumeFile = true;
+		}
+
+		Dependency dep;
+		if (existsFile(versionSpec)) {
+			dep = Dependency(NativePath(versionSpec));
+		} else if (assumeFile) {
+			logError("Folder %s not found", versionSpec.color(Mode.bold));
+		} else {
+			dep = Dependency(versionSpec);
+		}
+
+		return updateAndSave(dub, pack, dep);
+	}
+
+	protected int selectPackageScm(Dub dub, string pack, string remote, string ref_)
+	{
+		Dependency dep = Dependency(Repository(remote, ref_));
+		return updateAndSave(dub, pack, dep);
+	}
+
+	protected int updateAndSave(Dub dub, string pack, Dependency dep)
+	{
+		dub.project.selections.selectVersion(pack, dep);
+		dub.project.saveSelections();
+		return 0;
+	}
+}
+
+class SelectCommand : PackageBuildCommand {
+	this() @safe pure nothrow
+	{
+		this.name = "select";
+		this.argumentsPattern = "[<package> <version|path>|<package> <repository> <commit>]";
+		this.description = "Management for dependency selections";
+		this.helpText = [
+			"Shows the full dependency tree if executed without arguments, highlighting "~
+			"dependencies that are conflicting or causing other errors."
+		];
+	}
+	override int execute(Dub dub, string[] free_args, string[] app_args)
+	{
+		enforceUsage(free_args.length == 2
+			|| free_args.length == 3, "Expecting either two or three extra arguments.");
+
+		if (free_args.length == 2)
+			return selectPackage(dub, free_args[0], free_args[1]);
+		else if (free_args.length == 3)
+			return selectPackageScm(dub, free_args[0], free_args[1], free_args[2]);
+		else
+			assert(false);
 	}
 
 	protected int selectPackage(Dub dub, string pack, string versionSpec)
