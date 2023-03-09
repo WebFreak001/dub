@@ -23,3 +23,6 @@ jobs:
 
           This comment will automatically be updated to summarize some statistics in a few minutes.
         only_create: true
+
+    # NEVER checkout the repository or build dub here! It's unsafe!
+    # See https://github.com/dlang/dub/pull/2621

@@ -57,6 +57,7 @@ jobs:
 
     - name: Prepare comment for upload
       run: |
+        rm -rf pr
         mkdir -p ./pr
         mv comment.txt pr
         echo ${{ github.event.number }} > ./pr/NR
